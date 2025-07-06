@@ -31,9 +31,10 @@ jobs:
         run: |
           echo "🔄 Updating from ${{ inputs.current_version }} to ${{ inputs.latest_version }}"
 
-          # Fetch new hash
+          # Fetch new hash using nix-prefetch-url (more reliable than nix-prefetch-github)
           echo "📦 Fetching new source hash..."
-          NEW_HASH=$(nix-prefetch-github ThaUnknown miru --rev "v${{ inputs.latest_version }}")
+          TARBALL_URL="https://github.com/ThaUnknown/miru/archive/refs/tags/v${{ inputs.latest_version }}.tar.gz"
+          NEW_HASH=$(nix-prefetch-url --unpack "$TARBALL_URL")
           echo "✅ New hash: $NEW_HASH"
 
           # Update package.nix

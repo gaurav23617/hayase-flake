@@ -1,5 +1,5 @@
 #!/usr/bin/env nix-shell
-#!nix-shell -i bash -p curl jq nix-prefetch-github
+#!nix-shell -i bash -p curl jq nix
 
 set -euo pipefail
 
@@ -20,9 +20,10 @@ fi
 
 echo "🔄 Update needed: $CURRENT_VERSION -> $LATEST_VERSION"
 
-# Fetch new hash
+# Fetch new hash using nix-prefetch-url
 echo "📦 Fetching source hash..."
-NEW_HASH=$(nix-prefetch-github ThaUnknown miru --rev "v$LATEST_VERSION")
+TARBALL_URL="https://github.com/ThaUnknown/miru/archive/refs/tags/v$LATEST_VERSION.tar.gz"
+NEW_HASH=$(nix-prefetch-url --unpack "$TARBALL_URL")
 
 # Update package.nix
 echo "🔧 Updating package.nix..."
