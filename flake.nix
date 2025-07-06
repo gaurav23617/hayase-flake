@@ -18,67 +18,76 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         # Version information (auto-updated by GitHub Actions)
-        version = "5.5.10";
+        version = "6.3.7";
 
-        # Platform-specific download URLs and hashes
-        sources = {
-          x86_64-linux = {
-            url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-Hayase-${version}.AppImage";
-            hash = "sha256-nLPqEI6u5NNQ/kPbXRWPG0pIwutKNK2J8JeTPN6wHlg="; # Updated by CI
-          };
-          aarch64-linux = {
-            url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-arm64-Hayase-${version}.AppImage";
-            hash = "sha256-V4Vo9fuQ0X7Q6CBM7Akh3+MrgQOBgCuC41khFatYWi4="; # Updated by CI
-          };
+        # Only x86_64-linux is supported - there's only one Linux AppImage
+        supportedSystems = [ "x86_64-linux" ];
+
+        # Download URL and hash
+        src = pkgs.fetchurl {
+          url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-hayase-${version}-linux.AppImage";
+          hash = "sha256-ci2XkWDqTfyvl2lMCrWoHF29xdDybKsnmwXVYmyI="; # Updated by CI
         };
 
         hayase = pkgs.appimageTools.wrapType2 {
           pname = "hayase";
-          inherit version;
-
-          src = pkgs.fetchurl sources.${system};
+          inherit version src;
 
           extraPkgs =
             pkgs: with pkgs; [
               # Add any additional dependencies here
               gtk3
               gsettings-desktop-schemas
+              # Additional libraries that might be needed
+              libnotify
+              libappindicator-gtk3
             ];
 
           meta = with pkgs.lib; {
             description = "Torrent streaming made simple. Watch anime torrents, real-time with no waiting for downloads";
             homepage = "https://github.com/ThaUnknown/miru";
             license = licenses.gpl3Plus;
-            platforms = [
-              "x86_64-linux"
-              "aarch64-linux"
-            ];
-            maintainers = [ gaurav23617 ];
+            platforms = supportedSystems;
+            maintainers = [ maintainers.gaurav23617 ];
             mainProgram = "hayase";
           };
         };
 
       in
-      {
-        packages = {
-          default = hayase;
-          hayase = hayase;
-        };
-
-        apps = {
-          default = flake-utils.lib.mkApp {
-            drv = hayase;
-            name = "hayase";
+      if builtins.elem system supportedSystems then
+        {
+          packages = {
+            default = hayase;
+            hayase = hayase;
           };
-        };
 
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            nix-update
-            jq
-            curl
-          ];
-        };
-      }
+          apps = {
+            default = flake-utils.lib.mkApp {
+              drv = hayase;
+              name = "hayase";
+            };
+          };
+
+          devShells.default = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              nix-update
+              jq
+              curl
+            ];
+          };
+        }
+      else
+        {
+          # For unsupported systems, provide empty packages
+          packages = { };
+          apps = { };
+          devShells.default = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              nix-update
+              jq
+              curl
+            ];
+          };
+        }
     );
 }
