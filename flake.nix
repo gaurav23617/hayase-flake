@@ -18,7 +18,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         # Version information (auto-updated by GitHub Actions)
-        version = "6.3.7";
+        version = "6.3.9";
 
         # Only x86_64-linux is supported - there's only one Linux AppImage
         supportedSystems = [ "x86_64-linux" ];
@@ -26,7 +26,7 @@
         # Download URL and hash
         src = pkgs.fetchurl {
           url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-hayase-${version}-linux.AppImage";
-          hash = "sha256-722d979160ea4dfcaf79694c0ab5a81c5d91576f71743c9b2ac9e6c175589b22="; # Updated by CI
+          hash = "sha256-RlANC9NNzLTtFvOwz6UoCaW6Zr6K5IhihUABGoXhCv0="; # Updated by CI
         };
 
         hayase = pkgs.appimageTools.wrapType2 {

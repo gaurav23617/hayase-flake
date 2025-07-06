@@ -58,45 +58,46 @@ jobs:
             local url="$1"
             local platform="$2"
             
-            echo "Fetching $platform hash for: $url"
+            echo "Fetching $platform hash for: $url" >&2
             
             # Check if URL exists first
-            if ! curl --head --silent --fail "$url"; then
-              echo "✗ $platform asset not found: $url"
+            if ! curl --head --silent --fail "$url" >/dev/null 2>&1; then
+              echo "✗ $platform asset not found: $url" >&2
               
               # List all available assets for this release
-              echo "Available assets for v${NEW_VERSION}:"
-              curl -s "https://api.github.com/repos/ThaUnknown/miru/releases/tags/v${NEW_VERSION}" | jq -r '.assets[]? | .name' 2>/dev/null || echo "Failed to list assets"
+              echo "Available assets for v${NEW_VERSION}:" >&2
+              curl -s "https://api.github.com/repos/ThaUnknown/miru/releases/tags/v${NEW_VERSION}" | jq -r '.assets[]? | .name' 2>/dev/null || echo "Failed to list assets" >&2
               
               return 1
             fi
-            echo "✓ URL exists: $url"
+            echo "✓ URL exists: $url" >&2
             
             # Method 1: Direct nix-prefetch-url with SRI format
-            echo "Trying nix-prefetch-url..."
+            echo "Trying nix-prefetch-url..." >&2
             local hash
             hash=$(nix-prefetch-url --type sha256 "$url" 2>/dev/null)
             local exit_code=$?
             
             if [[ $exit_code -eq 0 && -n "$hash" ]]; then
-              # Convert to SRI format - nix-prefetch-url returns base32 by default
-              # We need to convert it to the proper SRI format
+              # Convert to SRI format if needed
               local sri_hash
-              sri_hash=$(nix hash to-sri --type sha256 "$hash" 2>/dev/null)
-              if [[ $? -eq 0 && -n "$sri_hash" ]]; then
-                echo "✓ Got $platform hash: $sri_hash"
-                echo "$sri_hash"
-                return 0
+              if [[ "$hash" =~ ^sha256- ]]; then
+                # Already in SRI format
+                sri_hash="$hash"
+              elif [[ "$hash" =~ ^[a-f0-9]{64}$ ]]; then
+                # Convert hex to SRI format
+                sri_hash="sha256-$(echo -n "$hash" | xxd -r -p | base64 -w 0)"
               else
-                # If conversion fails, try the hash as-is
-                echo "✓ Got $platform hash: $hash"
-                echo "$hash"
-                return 0
+                # Assume it's base32 and convert to SRI
+                sri_hash=$(nix hash to-sri --type sha256 "$hash" 2>/dev/null || echo "$hash")
               fi
+              echo "✓ Got $platform hash: $sri_hash" >&2
+              echo "$sri_hash"
+              return 0
             fi
             
             # Method 2: Download and hash locally
-            echo "Trying local download and hash method..."
+            echo "Trying local download and hash method..." >&2
             local temp_file=$(mktemp)
             if curl -L -o "$temp_file" "$url" 2>/dev/null; then
               # Use sha256sum and convert to SRI format
@@ -106,7 +107,7 @@ jobs:
                 # Convert hex to SRI format
                 local sri_hash
                 sri_hash="sha256-$(echo -n "$hex_hash" | xxd -r -p | base64 -w 0)"
-                echo "✓ Got $platform hash: $sri_hash"
+                echo "✓ Got $platform hash: $sri_hash" >&2
                 rm -f "$temp_file"
                 echo "$sri_hash"
                 return 0
@@ -114,7 +115,7 @@ jobs:
               rm -f "$temp_file"
             fi
             
-            echo "✗ All methods failed for $platform hash"
+            echo "✗ All methods failed for $platform hash" >&2
             return 1
           }
 
@@ -131,25 +132,17 @@ jobs:
           else
             echo "FAILED: Failed to get Linux hash, using fallback"
             # Use a known working hash as fallback
-            LINUX_HASH="sha256-ci2XkWDqTfyvl2lMCrWoHF2RV29xdDybKsnmwXVYmyI="
+            LINUX_HASH="sha256-RlANC9NNzLTtFvOwz6UoCaW6Zr6K5IhihUABGoXhCv0="
           fi
 
-          # Update hash in flake.nix using a more robust method
+          # Update hash in flake.nix using sed with proper escaping
           echo "Updating Linux hash..."
 
-          # Create a temporary file with the updated content
-          temp_file=$(mktemp)
+          # Escape the hash for use in sed (replace / with \/)
+          ESCAPED_HASH=$(echo "$LINUX_HASH" | sed 's/[\/&]/\\&/g')
 
-          # Use awk to replace the hash line more reliably
-          awk -v new_hash="$LINUX_HASH" '
-            /hash = "/ {
-              gsub(/hash = "[^"]*"/, "hash = \"" new_hash "\"")
-            }
-            { print }
-          ' flake.nix > "$temp_file"
-
-          # Replace the original file
-          mv "$temp_file" flake.nix
+          # Use sed to replace the hash line
+          sed -i "s/hash = \"[^\"]*\";/hash = \"$ESCAPED_HASH\"; # Updated by CI/" flake.nix
 
           echo "Updated flake.nix with:"
           echo "  Version: $NEW_VERSION"
@@ -158,8 +151,8 @@ jobs:
 
           # Verify the changes were made
           echo "Verifying changes in flake.nix:"
-          grep -A 5 -B 5 "version = " flake.nix
-          grep -A 5 "hash = " flake.nix
+          grep -A 2 -B 2 "version = " flake.nix
+          grep -A 2 -B 2 "hash = " flake.nix
 
       - name: Test flake build
         if: steps.check_release.outputs.needs_update == 'true'
