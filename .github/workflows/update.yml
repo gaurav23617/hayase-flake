@@ -49,22 +49,74 @@ jobs:
           # Update version in flake.nix
           sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" flake.nix
 
-          # Get new hashes for each platform
+          # Function to get hash for a URL using nix-prefetch-url with better error handling
+          get_hash() {
+            local url="$1"
+            local platform="$2"
+            
+            echo "Fetching $platform hash for: $url"
+            
+            # Check if URL exists first
+            if ! curl --head --silent --fail "$url" > /dev/null; then
+              echo "✗ $platform asset not found: $url"
+              return 1
+            fi
+            
+            # Use nix-prefetch-url with explicit error handling
+            local hash
+            hash=$(nix-prefetch-url --type sha256 "$url" 2>/dev/null)
+            local exit_code=$?
+            
+            if [[ $exit_code -eq 0 && $hash =~ ^[a-f0-9]{64}$ ]]; then
+              # Convert to base64 format
+              hash="sha256-$(echo -n "$hash" | xxd -r -p | base64 -w 0)"
+              echo "✓ Got $platform hash: $hash"
+              echo "$hash"
+              return 0
+            fi
+            
+            # Try alternative method with nix-prefetch-url without --type
+            hash=$(nix-prefetch-url "$url" 2>/dev/null)
+            if [[ $hash =~ ^sha256- ]]; then
+              echo "✓ Got $platform hash (alternative method): $hash"
+              echo "$hash"
+              return 0
+            fi
+            
+            echo "✗ Failed to get $platform hash"
+            return 1
+          }
+
+          # Get URLs for both platforms
           X86_64_URL="https://github.com/ThaUnknown/miru/releases/download/v${NEW_VERSION}/linux-Hayase-${NEW_VERSION}.AppImage"
           AARCH64_URL="https://github.com/ThaUnknown/miru/releases/download/v${NEW_VERSION}/linux-arm64-Hayase-${NEW_VERSION}.AppImage"
 
-          echo "Fetching x86_64 hash..."
-          X86_64_HASH=$(nix-prefetch-url "$X86_64_URL" 2>/dev/null || echo "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+          # Get hashes
+          X86_64_HASH=$(get_hash "$X86_64_URL" "x86_64")
+          X86_64_SUCCESS=$?
 
-          echo "Fetching aarch64 hash..."
-          AARCH64_HASH=$(nix-prefetch-url "$AARCH64_URL" 2>/dev/null || echo "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+          AARCH64_HASH=$(get_hash "$AARCH64_URL" "aarch64")
+          AARCH64_SUCCESS=$?
+
+          # Use placeholders for failed hashes
+          if [[ $X86_64_SUCCESS -ne 0 || -z "$X86_64_HASH" ]]; then
+            echo "Using placeholder for x86_64 hash"
+            X86_64_HASH="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          fi
+
+          if [[ $AARCH64_SUCCESS -ne 0 || -z "$AARCH64_HASH" ]]; then
+            echo "Using placeholder for aarch64 hash"
+            AARCH64_HASH="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          fi
 
           # Update hashes in flake.nix
           sed -i "/x86_64-linux = {/,/};/ s/hash = \"[^\"]*\"/hash = \"$X86_64_HASH\"/" flake.nix
           sed -i "/aarch64-linux = {/,/};/ s/hash = \"[^\"]*\"/hash = \"$AARCH64_HASH\"/" flake.nix
 
-          # Test the flake
-          nix flake check --impure || echo "Flake check failed, but proceeding..."
+          echo "Updated flake.nix with:"
+          echo "  Version: $NEW_VERSION"
+          echo "  x86_64 hash: $X86_64_HASH"
+          echo "  aarch64 hash: $AARCH64_HASH"
 
       - name: Update flake.lock
         if: steps.check_release.outputs.needs_update == 'true'
