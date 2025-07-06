@@ -26,7 +26,7 @@
         # Download URL and hash
         src = pkgs.fetchurl {
           url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-hayase-${version}-linux.AppImage";
-          hash = "sha256-ci2XkWDqTfyvl2lMCrWoHF29xdDybKsnmwXVYmyI="; # Updated by CI
+          hash = "sha256-722d979160ea4dfcaf79694c0ab5a81c5d91576f71743c9b2ac9e6c175589b22="; # Updated by CI
         };
 
         hayase = pkgs.appimageTools.wrapType2 {

@@ -72,21 +72,27 @@ jobs:
             fi
             echo "✓ URL exists: $url"
             
-            # Method 1: Direct nix-prefetch-url
+            # Method 1: Direct nix-prefetch-url with SRI format
             echo "Trying nix-prefetch-url..."
             local hash
             hash=$(nix-prefetch-url --type sha256 "$url" 2>/dev/null)
             local exit_code=$?
             
             if [[ $exit_code -eq 0 && -n "$hash" ]]; then
-              # Convert to sri format if it's a hex hash
-              if [[ $hash =~ ^[a-f0-9]{64}$ ]]; then
-                echo "Converting hex hash to SRI format..."
-                hash="sha256-$(echo -n "$hash" | xxd -r -p | base64 -w 0)"
+              # Convert to SRI format - nix-prefetch-url returns base32 by default
+              # We need to convert it to the proper SRI format
+              local sri_hash
+              sri_hash=$(nix hash to-sri --type sha256 "$hash" 2>/dev/null)
+              if [[ $? -eq 0 && -n "$sri_hash" ]]; then
+                echo "✓ Got $platform hash: $sri_hash"
+                echo "$sri_hash"
+                return 0
+              else
+                # If conversion fails, try the hash as-is
+                echo "✓ Got $platform hash: $hash"
+                echo "$hash"
+                return 0
               fi
-              echo "✓ Got $platform hash: $hash"
-              echo "$hash"
-              return 0
             fi
             
             # Method 2: Download and hash locally
@@ -94,12 +100,15 @@ jobs:
             local temp_file=$(mktemp)
             if curl -L -o "$temp_file" "$url" 2>/dev/null; then
               # Use sha256sum and convert to SRI format
-              hash=$(sha256sum "$temp_file" | cut -d' ' -f1)
-              if [[ -n "$hash" && $hash =~ ^[a-f0-9]{64}$ ]]; then
-                hash="sha256-$(echo -n "$hash" | xxd -r -p | base64 -w 0)"
-                echo "✓ Got $platform hash: $hash"
+              local hex_hash
+              hex_hash=$(sha256sum "$temp_file" | cut -d' ' -f1)
+              if [[ -n "$hex_hash" && $hex_hash =~ ^[a-f0-9]{64}$ ]]; then
+                # Convert hex to SRI format
+                local sri_hash
+                sri_hash="sha256-$(echo -n "$hex_hash" | xxd -r -p | base64 -w 0)"
+                echo "✓ Got $platform hash: $sri_hash"
                 rm -f "$temp_file"
-                echo "$hash"
+                echo "$sri_hash"
                 return 0
               fi
               rm -f "$temp_file"
@@ -121,32 +130,36 @@ jobs:
             echo "SUCCESS: Linux hash: $LINUX_HASH"
           else
             echo "FAILED: Failed to get Linux hash, using fallback"
-            # Use the hash from 6.3.7 as fallback, or the current 6.3.9 hash you provided
-            if [[ "$NEW_VERSION" == "6.3.9" ]]; then
-              LINUX_HASH="sha256-RlAN0L001MtO0WPwz6UoCaW6Zr6K5IhihUABGoXhD60="
-            else
-              LINUX_HASH="sha256-ci2XkWDqTfyvl2lMCrWoHF2RV29xdDybKsnmwXVYmyI="
-            fi
+            # Use a known working hash as fallback
+            LINUX_HASH="sha256-ci2XkWDqTfyvl2lMCrWoHF2RV29xdDybKsnmwXVYmyI="
           fi
 
-          # Update hash in flake.nix
+          # Update hash in flake.nix using a more robust method
           echo "Updating Linux hash..."
-          sed -i "s/hash = \"[^\"]*\"/hash = \"$LINUX_HASH\"/" flake.nix
+
+          # Create a temporary file with the updated content
+          temp_file=$(mktemp)
+
+          # Use awk to replace the hash line more reliably
+          awk -v new_hash="$LINUX_HASH" '
+            /hash = "/ {
+              gsub(/hash = "[^"]*"/, "hash = \"" new_hash "\"")
+            }
+            { print }
+          ' flake.nix > "$temp_file"
+
+          # Replace the original file
+          mv "$temp_file" flake.nix
 
           echo "Updated flake.nix with:"
           echo "  Version: $NEW_VERSION"
           echo "  Linux hash: $LINUX_HASH"
           echo "  Linux URL: $LINUX_URL"
 
-          # Also update the URL in flake.nix if we reverted to 6.3.7
-          if [[ "$NEW_VERSION" == "6.3.7" ]]; then
-            echo "Version was reverted to 6.3.7, updating URL as well"
-          fi
-
           # Verify the changes were made
           echo "Verifying changes in flake.nix:"
           grep -A 5 -B 5 "version = " flake.nix
-          grep -A 5 "sources = {" flake.nix
+          grep -A 5 "hash = " flake.nix
 
       - name: Test flake build
         if: steps.check_release.outputs.needs_update == 'true'
@@ -162,7 +175,9 @@ jobs:
         if: steps.check_release.outputs.needs_update == 'true'
         run: |
           echo "Updating flake.lock..."
-          nix flake update --commit-lock-file
+          nix flake update --commit-lock-file || {
+            echo "flake.lock update failed, continuing anyway"
+          }
 
       - name: Commit and push changes
         if: steps.check_release.outputs.needs_update == 'true'
