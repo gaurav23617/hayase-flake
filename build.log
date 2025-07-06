@@ -1,0 +1,34 @@
+warning: Git tree '/home/runner/work/hayase-flake/hayase-flake' is dirty
+unpacking 'github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b' into the Git cache...
+unpacking 'github:NixOS/nixpkgs/5c724ed1388e53cc231ed98330a60eb2f7be4be3' into the Git cache...
+warning: creating lock file "/home/runner/work/hayase-flake/hayase-flake/flake.lock": 
+• Added input 'flake-utils':
+    'github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b?narHash=sha256-l0KFg5HjrsfsO/JpG%2Br7fRrqm12kzFHyUHqHCVpMMbI%3D' (2024-11-13)
+• Added input 'flake-utils/systems':
+    'github:nix-systems/default/da67096a3b9bf56a91d16901293e51ba5b49a27e?narHash=sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768%3D' (2023-04-09)
+• Added input 'nixpkgs':
+    'github:NixOS/nixpkgs/5c724ed1388e53cc231ed98330a60eb2f7be4be3?narHash=sha256-xVNy/XopSfIG9c46nRmPaKfH1Gn/56vQ8%2B%2BxWA8itO4%3D' (2025-07-04)
+unpacking 'github:nix-systems/default/da67096a3b9bf56a91d16901293e51ba5b49a27e?narHash=sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768%3D' into the Git cache...
+error:
+       … while evaluating a branch condition
+         at /nix/store/cd7fkv2r1nflz758r8bsnqfvkq7f72wj-source/lib/customisation.nix:305:5:
+          304|     in
+          305|     if missingArgs == { } then
+             |     ^
+          306|       makeOverridable f allArgs
+
+       … while calling the 'removeAttrs' builtin
+         at /nix/store/cd7fkv2r1nflz758r8bsnqfvkq7f72wj-source/lib/attrsets.nix:657:28:
+          656|   */
+          657|   filterAttrs = pred: set: removeAttrs set (filter (name: !pred name set.${name}) (attrNames set));
+             |                            ^
+          658|
+
+       (stack trace truncated; use '--show-trace' to show the full, detailed trace)
+
+       error: undefined variable 'src'
+       at /nix/store/6vivqpy2v9whlnsm3vz1h7czzdw2ny7i-source/package.nix:44:27:
+           43|   pnpmDeps = pnpm.fetchDeps {
+           44|     inherit pname version src;
+             |                           ^
+           45|     hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Update this

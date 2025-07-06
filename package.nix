@@ -15,7 +15,7 @@
 
 let
   pname = "hayase";
-  version = "5.5.10";
+  version = "6.3.9";
 in
 stdenv.mkDerivation {
   inherit pname version;
