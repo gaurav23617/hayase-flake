@@ -1,0 +1,119 @@
+name: Direct Update to Main
+
+on:
+  workflow_call:
+    inputs:
+      current_version:
+        required: true
+        type: string
+      latest_version:
+        required: true
+        type: string
+
+jobs:
+  direct-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Download updated files
+        uses: actions/download-artifact@v4
+        with:
+          name: updated-files
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+
+      - name: Commit and push changes
+        run: |
+          echo "🔄 Committing changes to main branch..."
+
+          # Add the updated files
+          git add package.nix
+          if [ -f version.json ]; then
+            git add version.json
+          fi
+
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "⚠️  No changes to commit"
+            exit 0
+          fi
+
+          # Commit the changes
+          git commit -m "hayase: ${{ inputs.current_version }} -> ${{ inputs.latest_version }}
+
+          - Updated package.nix with new version and hashes
+          - Build tested successfully
+          - Automated update by GitHub Actions"
+
+          # Push to main branch
+          git push origin main
+
+          echo "✅ Successfully updated main branch!"
+
+      - name: Create success comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            // Create a comment on the repository about the successful update
+            const { data: commits } = await github.rest.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 1
+            });
+
+            if (commits.length > 0) {
+              await github.rest.repos.createCommitComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: commits[0].sha,
+                body: `🎉 **Hayase automatically updated!**
+                
+                **Version:** \`${{ inputs.current_version }}\` → \`${{ inputs.latest_version }}\`
+                
+                ✅ Package updated and tested successfully
+                ✅ All hashes updated automatically
+                ✅ Build verification completed
+                
+                **Changes:**
+                - Updated \`package.nix\` with new version and source hash
+                - Updated pnpm dependencies hash
+                - Build tested and verified
+                
+                🔗 [View Release](https://github.com/ThaUnknown/miru/releases/tag/v${{ inputs.latest_version }})`
+              });
+            }
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 Direct Update Failed - ${new Date().toISOString().split('T')[0]}`,
+              body: `The direct update to main branch failed during commit/push.
+              
+              **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              
+              **Attempted Update:** ${{ inputs.current_version }} → ${{ inputs.latest_version }}
+              
+              The package was updated successfully, but committing to main branch failed.
+              Please check the logs and fix any issues.`
+            });

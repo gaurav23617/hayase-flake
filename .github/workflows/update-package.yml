@@ -1,0 +1,82 @@
+name: Direct Update to Main
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_pr:
+        description: "Skip PR creation and update main branch directly"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  direct-update:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.skip_pr == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Check and update
+        run: |
+          # Get versions
+          LATEST_TAG=$(curl -s https://api.github.com/repos/ThaUnknown/miru/releases/latest | jq -r .tag_name)
+          LATEST_VERSION=${LATEST_TAG#v}
+          CURRENT_VERSION=$(grep -oP 'version = "\K[^"]+' package.nix)
+
+          echo "Current: $CURRENT_VERSION"
+          echo "Latest: $LATEST_VERSION"
+
+          if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+            echo "Already up to date"
+            exit 0
+          fi
+
+          # Update package
+          echo "Updating package..."
+          NEW_HASH=$(nix-prefetch-github ThaUnknown miru --rev "v$LATEST_VERSION")
+
+          # Update files
+          sed -i "s/version = \".*\"/version = \"$LATEST_VERSION\"/" package.nix
+          sed -i "s/hash = \".*\"/hash = \"$NEW_HASH\"/" package.nix
+
+          # Update version.json if it exists
+          if [ -f version.json ]; then
+            jq --arg version "$LATEST_VERSION" \
+               --arg hash "$NEW_HASH" \
+               '.version = $version | .sha256 = $hash' \
+               version.json > version.json.tmp && mv version.json.tmp version.json
+          fi
+
+          # Fix pnpm hash
+          if ! nix build 2>&1 | tee /tmp/build.log; then
+            if grep -q "got:" /tmp/build.log; then
+              NEW_PNPM_HASH=$(grep "got:" /tmp/build.log | tail -1 | sed 's/.*got: //')
+              sed -i "s/hash = \"sha256-.*\"/hash = \"$NEW_PNPM_HASH\"/" package.nix
+            fi
+          fi
+
+          # Test final build
+          nix build
+
+          # Commit changes
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add package.nix version.json
+          git commit -m "hayase: $CURRENT_VERSION -> $LATEST_VERSION"
+          git push

@@ -4,228 +4,72 @@ on:
   schedule:
     - cron: "0 2 * * 1" # Every Monday at 2 AM UTC
   workflow_dispatch:
+    inputs:
+      update_method:
+        description: "How to apply the update"
+        required: false
+        default: "pr"
+        type: choice
+        options:
+          - pr
+          - direct
 
 jobs:
-  update:
+  check-version:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read # We'll use the app token for write operations
-
+    outputs:
+      update_needed: ${{ steps.check.outputs.update_needed }}
+      current_version: ${{ steps.check.outputs.current_version }}
+      latest_version: ${{ steps.check.outputs.latest_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate App Token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          # Optional: specify repositories if app is installed on multiple repos
-          repositories: hayase-flake
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
-
-      - name: Setup Nix Cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
-
-      - name: Make update script executable
+      - name: Check for updates
+        id: check
         run: |
-          echo "🔧 Making update script executable..."
-          chmod +x update.sh
-          echo "✅ Update script is now executable"
+          # Get the latest version from GitHub API
+          LATEST_TAG=$(curl -s https://api.github.com/repos/ThaUnknown/miru/releases/latest | jq -r .tag_name)
+          LATEST_VERSION=${LATEST_TAG#v}
 
-      - name: Run update script
-        id: update
-        run: |
-          echo "🚀 Running update script..."
-          set +e  # Don't exit on error, we want to handle it ourselves
+          # Get current version from package.nix
+          CURRENT_VERSION=$(grep -oP 'version = "\K[^"]+' package.nix)
 
-          # Capture the output of the update script
-          if ./update.sh 2>&1 | tee update_output.txt; then
-            echo "✅ Update script completed successfully"
-            
-            # Check if update was needed
-            if grep -q "Already up to date" update_output.txt; then
-              echo "ℹ️  No update needed - already at latest version"
-              echo "update_needed=false" >> $GITHUB_OUTPUT
-            else
-              echo "📦 Update available - processing..."
-              echo "update_needed=true" >> $GITHUB_OUTPUT
-              
-              # Extract version information with better error handling
-              if CURRENT=$(grep "Current version:" update_output.txt | cut -d' ' -f3); then
-                echo "current_version=$CURRENT" >> $GITHUB_OUTPUT
-                echo "📋 Current version: $CURRENT"
-              else
-                echo "⚠️  Could not extract current version"
-                echo "current_version=unknown" >> $GITHUB_OUTPUT
-              fi
-              
-              if LATEST=$(grep "Latest version:" update_output.txt | cut -d' ' -f3); then
-                echo "latest_version=$LATEST" >> $GITHUB_OUTPUT
-                echo "📋 Latest version: $LATEST"
-              else
-                echo "⚠️  Could not extract latest version"
-                echo "latest_version=unknown" >> $GITHUB_OUTPUT
-              fi
-            fi
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+
+          if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+            echo "Already up to date"
+            echo "update_needed=false" >> $GITHUB_OUTPUT
           else
-            echo "❌ Update script failed!"
-            echo "📋 Update script output:"
-            cat update_output.txt
-            echo "📋 Full error details above ⬆️"
-            exit 1
+            echo "Update needed: $CURRENT_VERSION -> $LATEST_VERSION"
+            echo "update_needed=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Fix pnpm hash
-        if: steps.update.outputs.update_needed == 'true'
-        run: |
-          echo "🔍 Attempting initial build to get correct pnpm hash..."
-          set +e  # Don't exit on error
+  update-package:
+    needs: check-version
+    if: needs.check-version.outputs.update_needed == 'true'
+    uses: ./.github/workflows/update-package.yml
+    with:
+      current_version: ${{ needs.check-version.outputs.current_version }}
+      latest_version: ${{ needs.check-version.outputs.latest_version }}
+      update_method: ${{ github.event.inputs.update_method || 'pr' }}
+    secrets: inherit
 
-          if nix build 2>&1 | tee build.log; then
-            echo "✅ Build succeeded on first try - no hash update needed"
-          else
-            echo "⚠️  Build failed (expected) - extracting pnpm hash..."
-            
-            # Show the build error for debugging
-            echo "📋 Build output:"
-            cat build.log
-            
-            # Extract the expected hash from build failure
-            if grep -q "got:" build.log; then
-              NEW_PNPM_HASH=$(grep "got:" build.log | tail -1 | sed 's/.*got: //')
-              echo "✅ Found pnpm hash: $NEW_PNPM_HASH"
-              
-              # Update the hash in package.nix
-              echo "🔄 Updating pnpm hash in package.nix..."
-              sed -i "s/hash = \"sha256-.*\"/hash = \"$NEW_PNPM_HASH\"/" package.nix
-              echo "✅ pnpm hash updated successfully"
-              
-              # Also update version.json if it exists
-              if [ -f version.json ]; then
-                echo "🔄 Updating version.json..."
-                jq --arg version "${{ steps.update.outputs.latest_version }}" \
-                   --arg hash "$NEW_PNPM_HASH" \
-                   '.version = $version | .sha256 = $hash' \
-                   version.json > version.json.tmp && mv version.json.tmp version.json
-                echo "✅ version.json updated"
-              fi
-            else
-              echo "❌ Could not extract pnpm hash from build output"
-              echo "📋 Build log content:"
-              cat build.log
-              echo "📋 Expected to find 'got:' in the output above"
-              exit 1
-            fi
-          fi
+  create-pr:
+    needs: [check-version, update-package]
+    if: needs.check-version.outputs.update_needed == 'true' && (github.event.inputs.update_method == 'pr' || github.event.inputs.update_method == '' || github.event_name == 'schedule')
+    uses: ./.github/workflows/create-pr.yml
+    with:
+      current_version: ${{ needs.check-version.outputs.current_version }}
+      latest_version: ${{ needs.check-version.outputs.latest_version }}
+    secrets: inherit
 
-      - name: Test build
-        if: steps.update.outputs.update_needed == 'true'
-        run: |
-          echo "🧪 Testing final build..."
-          set +e  # Don't exit immediately on error
-
-          if nix build .#hayase 2>&1 | tee final_build.log; then
-            echo "✅ Build successful!"
-            echo "📦 Package built successfully - ready for PR"
-          else
-            echo "❌ Final build failed!"
-            echo "📋 Final build output:"
-            cat final_build.log
-            echo "📋 This indicates there might be other issues beyond pnpm hash"
-            exit 1
-          fi
-
-      - name: Create Pull Request
-        if: steps.update.outputs.update_needed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          commit-message: "hayase: ${{ steps.update.outputs.current_version }} -> ${{ steps.update.outputs.latest_version }}"
-          title: "🤖 hayase: ${{ steps.update.outputs.current_version }} → ${{ steps.update.outputs.latest_version }}"
-          body: |
-            ## 🤖 Automated Hayase Update
-
-            **Version:** `${{ steps.update.outputs.current_version }}` → `${{ steps.update.outputs.latest_version }}`
-
-            This PR was automatically created by the Hayase Auto Updater GitHub App.
-
-            ### ✅ Completed Tasks
-            - [x] Version updated in `package.nix`
-            - [x] Source hash updated
-            - [x] pnpm dependencies hash updated
-            - [x] `version.json` updated
-            - [x] Build tested successfully
-
-            ### 🔗 Links
-            - **📋 Changelog:** https://github.com/ThaUnknown/miru/releases/tag/v${{ steps.update.outputs.latest_version }}
-            - **📦 Source:** https://github.com/ThaUnknown/miru/archive/refs/tags/v${{ steps.update.outputs.latest_version }}.tar.gz
-
-            ### 🧪 Build Status
-            The package has been successfully built and tested with Nix. Ready to merge! 🚀
-
-            ---
-            *This PR was created by [Hayase Auto Updater](https://github.com/apps/hayase-auto-updater)*
-          branch: update-hayase-${{ steps.update.outputs.latest_version }}
-          delete-branch: true
-          labels: |
-            🤖 automated
-            📦 dependencies
-            🔄 update
-          reviewers: gaurav23617
-          # Optional: auto-merge if you want
-          # draft: false
-
-      - name: Comment on successful update
-        if: steps.update.outputs.update_needed == 'true'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            // This will comment on the PR once it's created
-            const { data: prs } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head: `${context.repo.owner}:update-hayase-${{ steps.update.outputs.latest_version }}`,
-              state: 'open'
-            });
-
-            if (prs.length > 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prs[0].number,
-                body: `🎉 **Update successful!** 
-                
-                The build completed successfully and all tests passed. This update is ready for review and merge.
-                
-                **Changes:**
-                - Updated from \`${{ steps.update.outputs.current_version }}\` to \`${{ steps.update.outputs.latest_version }}\`
-                - Fixed all dependency hashes
-                - Verified build works correctly
-                
-                You can merge this PR when ready! 🚀`
-              });
-            }
-
-      - name: Notify on failure
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            // Create an issue if the update fails
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `🚨 Hayase Update Failed - ${new Date().toISOString().split('T')[0]}`,
-              body: `The automated Hayase update workflow failed.
-              
-              **Workflow Run:** ${context.payload.repository.html_url}/actions/runs/${context.runId}
-              
-              Please check the logs and fix any issues.`,
-              labels: ['🐛 bug', '🤖 automated', '🚨 failed-update']
-            });
+  direct-update:
+    needs: [check-version, update-package]
+    if: needs.check-version.outputs.update_needed == 'true' && github.event.inputs.update_method == 'direct'
+    uses: ./.github/workflows/direct-update.yml
+    with:
+      current_version: ${{ needs.check-version.outputs.current_version }}
+      latest_version: ${{ needs.check-version.outputs.latest_version }}
+    secrets: inherit

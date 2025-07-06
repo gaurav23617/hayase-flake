@@ -1,0 +1,109 @@
+name: Create Pull Request
+
+on:
+  workflow_call:
+    inputs:
+      current_version:
+        required: true
+        type: string
+      latest_version:
+        required: true
+        type: string
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Download updated files
+        uses: actions/download-artifact@v4
+        with:
+          name: updated-files
+
+      - name: Create Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          commit-message: "hayase: ${{ inputs.current_version }} -> ${{ inputs.latest_version }}"
+          title: "🤖 hayase: ${{ inputs.current_version }} → ${{ inputs.latest_version }}"
+          body: |
+            ## 🤖 Automated Hayase Update
+
+            **Version:** `${{ inputs.current_version }}` → `${{ inputs.latest_version }}`
+
+            This PR was automatically created by the Hayase update workflow.
+
+            ### ✅ Changes Made
+            - [x] Version updated in `package.nix`
+            - [x] Source hash updated
+            - [x] pnpm dependencies hash updated
+            - [x] Build tested successfully
+
+            ### 🔗 Links
+            - **📋 Changelog:** https://github.com/ThaUnknown/miru/releases/tag/v${{ inputs.latest_version }}
+            - **📦 Source:** https://github.com/ThaUnknown/miru/archive/refs/tags/v${{ inputs.latest_version }}.tar.gz
+
+            ### 🧪 Build Status
+            ✅ Package has been successfully built and tested with Nix.
+
+            ---
+            *Automated update by GitHub Actions*
+          branch: update-hayase-${{ inputs.latest_version }}
+          delete-branch: true
+          # Removed labels to avoid permission issues
+          reviewers: gaurav23617
+
+      - name: Comment on PR
+        if: steps.create-pr.outputs.pull-request-number
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.create-pr.outputs.pull-request-number }},
+              body: `🎉 **Update ready for review!**
+              
+              The build completed successfully and all tests passed.
+              
+              **Changes:**
+              - Updated from \`${{ inputs.current_version }}\` to \`${{ inputs.latest_version }}\`
+              - All dependency hashes updated automatically
+              - Build verification completed
+              
+              You can merge this PR when ready! 🚀`
+            });
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 Hayase Update Failed - ${new Date().toISOString().split('T')[0]}`,
+              body: `The automated Hayase update workflow failed.
+              
+              **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              
+              **Attempted Update:** ${{ inputs.current_version }} → ${{ inputs.latest_version }}
+              
+              Please check the logs and fix any issues.`
+            });
