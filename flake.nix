@@ -18,17 +18,17 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         # Version information (auto-updated by GitHub Actions)
-        version = "6.3.9";
+        version = "5.5.10";
 
         # Platform-specific download URLs and hashes
         sources = {
           x86_64-linux = {
             url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-Hayase-${version}.AppImage";
-            hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Updated by CI
+            hash = "sha256-nLPqEI6u5NNQ/kPbXRWPG0pIwutKNK2J8JeTPN6wHlg="; # Updated by CI
           };
           aarch64-linux = {
             url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-arm64-Hayase-${version}.AppImage";
-            hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Updated by CI
+            hash = "sha256-V4Vo9fuQ0X7Q6CBM7Akh3+MrgQOBgCuC41khFatYWi4="; # Updated by CI
           };
         };
 
