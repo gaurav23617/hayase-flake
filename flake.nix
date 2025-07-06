@@ -1,5 +1,5 @@
 {
-  description = "Nix flake for Hayase";
+  description = "Hayase - Stream anime torrents, real-time with no waiting for downloads";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -11,16 +11,12 @@
       self,
       nixpkgs,
       flake-utils,
-      ...
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ self.overlays.default ];
-        };
-        hayase = pkgs.hayase;
+        pkgs = nixpkgs.legacyPackages.${system};
+        hayase = pkgs.callPackage ./package.nix { };
       in
       {
         packages = {
@@ -28,51 +24,32 @@
           hayase = hayase;
         };
 
-        devShells.default = import ./shell.nix { inherit pkgs; };
+        devShells.default = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            nodejs
+            pnpm
+            electron
+            # Update tools
+            curl
+            jq
+            nix-prefetch-github
+          ];
 
-        # Add checks for testing
+          shellHook = ''
+            echo "Hayase development environment"
+            echo "Available commands:"
+            echo "  nix build                 - Build the package"
+            echo "  nix run                   - Run hayase"
+            echo "  ./update.sh               - Update to latest version"
+            echo "  pnpm install              - Install dependencies"
+            echo "  pnpm dev                  - Start development server"
+          '';
+        };
+
+        # Simple checks
         checks = {
           build = hayase;
-
-          # Add a simple version check
-          version-check = pkgs.runCommand "hayase-version-check" { } ''
-            echo "Checking version consistency..."
-            expected_version=$(${pkgs.jq}/bin/jq -r '.version' ${./version.json})
-            actual_version="${hayase.version}"
-
-            if [ "$expected_version" != "$actual_version" ]; then
-              echo "Version mismatch: expected $expected_version, got $actual_version"
-              exit 1
-            fi
-
-            echo "Version check passed: $actual_version"
-            touch $out
-          '';
-
-          # Add validation script check
-          validation =
-            pkgs.runCommand "hayase-validation"
-              {
-                buildInputs = with pkgs; [
-                  bash
-                  jq
-                  curl
-                ];
-              }
-              ''
-                cp -r ${./.} ./source
-                cd source
-                chmod +x scripts/validate-version.sh
-                ./scripts/validate-version.sh
-                touch $out
-              '';
         };
       }
-    )
-    // {
-      # Add overlay for easier integration
-      overlays.default = final: prev: {
-        hayase = final.callPackage ./package.nix { };
-      };
-    };
+    );
 }

@@ -3,61 +3,97 @@
   stdenv,
   fetchFromGitHub,
   makeWrapper,
-# Add any runtime dependencies here
+  electron,
+  nodejs,
+  pnpm,
+  python3,
+  pkg-config,
+  libsecret,
+  copyDesktopItems,
+  makeDesktopItem,
 }:
 
 let
-  versionInfo = builtins.fromJSON (builtins.readFile ./version.json);
-in
-
-stdenv.mkDerivation rec {
   pname = "hayase";
-  version = versionInfo.version;
+  version = "5.5.10";
+in
+stdenv.mkDerivation {
+  inherit pname version;
 
   src = fetchFromGitHub {
-    owner = "ClearVision";
-    repo = "Miru";
+    owner = "ThaUnknown";
+    repo = "miru";
     rev = "v${version}";
-    sha256 = versionInfo.sha256;
+    hash = "sha256-nLPqEI6u5NNQ/kPbXRWPG0pIwutKNK2J8JeTPN6wHlg=";
   };
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [
+    makeWrapper
+    nodejs
+    pnpm.configHook
+    python3
+    pkg-config
+    copyDesktopItems
+  ];
 
-  # Add runtime dependencies if needed
-  # buildInputs = [ ];
+  buildInputs = [
+    libsecret
+  ];
+
+  pnpmDeps = pnpm.fetchDeps {
+    inherit pname version src;
+    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Update this
+  };
 
   installPhase = ''
     runHook preInstall
 
+    # Build the application
+    pnpm build
+
+    # Install the built application
     mkdir -p $out/share/hayase
-    mkdir -p $out/bin
+    cp -r dist/* $out/share/hayase/
 
-    # Copy application files
-    cp -r * $out/share/hayase/
+    # Create wrapper script
+    makeWrapper ${electron}/bin/electron $out/bin/hayase \
+      --add-flags $out/share/hayase \
+      --set-default ELECTRON_IS_DEV 0
 
-    # Create wrapper script if there's a main executable
-    # Adjust this based on how Hayase is actually run
-    if [ -f "$out/share/hayase/hayase" ]; then
-      makeWrapper $out/share/hayase/hayase $out/bin/hayase \
-        --chdir $out/share/hayase
+    # Install desktop file
+    mkdir -p $out/share/applications
+    cp $out/share/hayase/hayase.desktop $out/share/applications/ || true
+
+    # Install icon if it exists
+    if [ -f $out/share/hayase/assets/icon.png ]; then
+      mkdir -p $out/share/pixmaps
+      cp $out/share/hayase/assets/icon.png $out/share/pixmaps/hayase.png
     fi
 
     runHook postInstall
   '';
 
-  # Add fixup phase for permissions if needed
-  postFixup = ''
-    # Make sure executables are executable
-    find $out -name "*.sh" -exec chmod +x {} \;
-    find $out -name "hayase" -exec chmod +x {} \;
-  '';
+  desktopItems = [
+    (makeDesktopItem {
+      name = "hayase";
+      exec = "hayase";
+      icon = "hayase";
+      desktopName = "Hayase";
+      comment = "Stream anime torrents, real-time with no waiting for downloads";
+      categories = [
+        "AudioVideo"
+        "Video"
+      ];
+      startupNotify = true;
+    })
+  ];
 
   meta = with lib; {
-    description = "Hayase: anime streaming app";
-    homepage = "https://github.com/ClearVision/Miru";
+    description = "Hayase - Stream anime torrents, real-time with no waiting for downloads";
+    homepage = "https://github.com/ThaUnknown/miru";
     license = licenses.gpl3Plus;
+    maintainers = with maintainers; [ ];
     platforms = platforms.linux;
-    maintainers = [ ]; # Add your maintainer info here
-    mainProgram = "hayase"; # Specify the main program
+    mainProgram = "hayase";
   };
 }
