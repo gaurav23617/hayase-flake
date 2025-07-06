@@ -1,30 +1,25 @@
-name: Direct Update to Main
+name: Update Package
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      skip_pr:
-        description: "Skip PR creation and update main branch directly"
+      current_version:
+        required: true
+        type: string
+      latest_version:
+        required: true
+        type: string
+      update_method:
         required: false
-        default: false
-        type: boolean
+        type: string
+        default: "pr"
 
 jobs:
-  direct-update:
+  update:
     runs-on: ubuntu-latest
-    if: github.event.inputs.skip_pr == 'true'
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install required tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -32,51 +27,73 @@ jobs:
       - name: Setup Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Check and update
+      - name: Update package files
         run: |
-          # Get versions
-          LATEST_TAG=$(curl -s https://api.github.com/repos/ThaUnknown/miru/releases/latest | jq -r .tag_name)
-          LATEST_VERSION=${LATEST_TAG#v}
-          CURRENT_VERSION=$(grep -oP 'version = "\K[^"]+' package.nix)
+          echo "🔄 Updating from ${{ inputs.current_version }} to ${{ inputs.latest_version }}"
 
-          echo "Current: $CURRENT_VERSION"
-          echo "Latest: $LATEST_VERSION"
+          # Fetch new hash
+          echo "📦 Fetching new source hash..."
+          NEW_HASH=$(nix-prefetch-github ThaUnknown miru --rev "v${{ inputs.latest_version }}")
+          echo "✅ New hash: $NEW_HASH"
 
-          if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
-            echo "Already up to date"
-            exit 0
-          fi
-
-          # Update package
-          echo "Updating package..."
-          NEW_HASH=$(nix-prefetch-github ThaUnknown miru --rev "v$LATEST_VERSION")
-
-          # Update files
-          sed -i "s/version = \".*\"/version = \"$LATEST_VERSION\"/" package.nix
+          # Update package.nix
+          echo "🔧 Updating package.nix..."
+          sed -i "s/version = \".*\"/version = \"${{ inputs.latest_version }}\"/" package.nix
           sed -i "s/hash = \".*\"/hash = \"$NEW_HASH\"/" package.nix
 
-          # Update version.json if it exists
+          # Update version.json (if it exists)
           if [ -f version.json ]; then
-            jq --arg version "$LATEST_VERSION" \
+            echo "🔧 Updating version.json..."
+            jq --arg version "${{ inputs.latest_version }}" \
                --arg hash "$NEW_HASH" \
                '.version = $version | .sha256 = $hash' \
                version.json > version.json.tmp && mv version.json.tmp version.json
           fi
 
-          # Fix pnpm hash
+          echo "✅ Package files updated successfully"
+
+      - name: Fix pnpm dependencies hash
+        run: |
+          echo "🔍 Getting correct pnpm dependencies hash..."
+
+          # Try to build to get the correct pnpm hash
           if ! nix build 2>&1 | tee /tmp/build.log; then
+            echo "⚠️  Build failed (expected) - extracting pnpm hash..."
+            
+            # Extract the expected hash from build failure
             if grep -q "got:" /tmp/build.log; then
               NEW_PNPM_HASH=$(grep "got:" /tmp/build.log | tail -1 | sed 's/.*got: //')
+              echo "✅ Found pnpm hash: $NEW_PNPM_HASH"
+              
+              # Update the hash in package.nix
+              echo "🔄 Updating pnpm hash in package.nix..."
               sed -i "s/hash = \"sha256-.*\"/hash = \"$NEW_PNPM_HASH\"/" package.nix
+              echo "✅ pnpm hash updated successfully"
+            else
+              echo "❌ Could not extract pnpm hash from build output"
+              echo "📋 Build log:"
+              cat /tmp/build.log
+              exit 1
             fi
+          else
+            echo "✅ Build succeeded on first try - no pnpm hash update needed"
           fi
 
-          # Test final build
-          nix build
+      - name: Test final build
+        run: |
+          echo "🧪 Testing final build..."
+          if nix build; then
+            echo "✅ Build successful! Package is ready"
+          else
+            echo "❌ Final build failed!"
+            exit 1
+          fi
 
-          # Commit changes
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add package.nix version.json
-          git commit -m "hayase: $CURRENT_VERSION -> $LATEST_VERSION"
-          git push
+      - name: Upload updated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-files
+          path: |
+            package.nix
+            version.json
+          retention-days: 1
