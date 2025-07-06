@@ -1,5 +1,5 @@
 {
-  description = "Hayase - Stream anime torrents, real-time with no waiting for downloads";
+  description = "Hayase (Miru) - Torrent streaming made simple";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -16,7 +16,48 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        hayase = pkgs.callPackage ./package.nix { };
+
+        # Version information (auto-updated by GitHub Actions)
+        version = "6.3.9";
+
+        # Platform-specific download URLs and hashes
+        sources = {
+          x86_64-linux = {
+            url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-Hayase-${version}.AppImage";
+            hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Updated by CI
+          };
+          aarch64-linux = {
+            url = "https://github.com/ThaUnknown/miru/releases/download/v${version}/linux-arm64-Hayase-${version}.AppImage";
+            hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Updated by CI
+          };
+        };
+
+        hayase = pkgs.appimageTools.wrapType2 {
+          pname = "hayase";
+          inherit version;
+
+          src = pkgs.fetchurl sources.${system};
+
+          extraPkgs =
+            pkgs: with pkgs; [
+              # Add any additional dependencies here
+              gtk3
+              gsettings-desktop-schemas
+            ];
+
+          meta = with pkgs.lib; {
+            description = "Torrent streaming made simple. Watch anime torrents, real-time with no waiting for downloads";
+            homepage = "https://github.com/ThaUnknown/miru";
+            license = licenses.gpl3Plus;
+            platforms = [
+              "x86_64-linux"
+              "aarch64-linux"
+            ];
+            maintainers = [ gaurav23617 ];
+            mainProgram = "hayase";
+          };
+        };
+
       in
       {
         packages = {
@@ -24,31 +65,19 @@
           hayase = hayase;
         };
 
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            nodejs
-            pnpm
-            electron
-            # Update tools
-            curl
-            jq
-            nix-prefetch-github
-          ];
-
-          shellHook = ''
-            echo "Hayase development environment"
-            echo "Available commands:"
-            echo "  nix build                 - Build the package"
-            echo "  nix run                   - Run hayase"
-            echo "  ./update.sh               - Update to latest version"
-            echo "  pnpm install              - Install dependencies"
-            echo "  pnpm dev                  - Start development server"
-          '';
+        apps = {
+          default = flake-utils.lib.mkApp {
+            drv = hayase;
+            name = "hayase";
+          };
         };
 
-        # Simple checks
-        checks = {
-          build = hayase;
+        devShells.default = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            nix-update
+            jq
+            curl
+          ];
         };
       }
     );

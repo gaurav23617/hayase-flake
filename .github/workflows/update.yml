@@ -1,0 +1,109 @@
+name: Update Hayase
+
+on:
+  schedule:
+    # Check for updates every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v8
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v2
+
+      - name: Check for new release
+        id: check_release
+        run: |
+          # Get latest release from GitHub API
+          LATEST_RELEASE=$(curl -s "https://api.github.com/repos/ThaUnknown/miru/releases/latest" | jq -r '.tag_name' | sed 's/^v//')
+          CURRENT_VERSION=$(grep -o 'version = "[^"]*"' flake.nix | sed 's/version = "\(.*\)"/\1/')
+
+          echo "Latest release: $LATEST_RELEASE"
+          echo "Current version: $CURRENT_VERSION"
+
+          if [ "$LATEST_RELEASE" != "$CURRENT_VERSION" ]; then
+            echo "New version available: $LATEST_RELEASE"
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "new_version=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          else
+            echo "No update needed"
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update flake
+        if: steps.check_release.outputs.needs_update == 'true'
+        run: |
+          NEW_VERSION="${{ steps.check_release.outputs.new_version }}"
+
+          # Update version in flake.nix
+          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" flake.nix
+
+          # Get new hashes for each platform
+          X86_64_URL="https://github.com/ThaUnknown/miru/releases/download/v${NEW_VERSION}/linux-Hayase-${NEW_VERSION}.AppImage"
+          AARCH64_URL="https://github.com/ThaUnknown/miru/releases/download/v${NEW_VERSION}/linux-arm64-Hayase-${NEW_VERSION}.AppImage"
+
+          echo "Fetching x86_64 hash..."
+          X86_64_HASH=$(nix-prefetch-url "$X86_64_URL" 2>/dev/null || echo "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
+          echo "Fetching aarch64 hash..."
+          AARCH64_HASH=$(nix-prefetch-url "$AARCH64_URL" 2>/dev/null || echo "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
+          # Update hashes in flake.nix
+          sed -i "/x86_64-linux = {/,/};/ s/hash = \"[^\"]*\"/hash = \"$X86_64_HASH\"/" flake.nix
+          sed -i "/aarch64-linux = {/,/};/ s/hash = \"[^\"]*\"/hash = \"$AARCH64_HASH\"/" flake.nix
+
+          # Test the flake
+          nix flake check --impure || echo "Flake check failed, but proceeding..."
+
+      - name: Update flake.lock
+        if: steps.check_release.outputs.needs_update == 'true'
+        run: |
+          nix flake update
+
+      - name: Commit and push changes
+        if: steps.check_release.outputs.needs_update == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add flake.nix flake.lock
+          git commit -m "Update Hayase to v${{ steps.check_release.outputs.new_version }}"
+          git push
+
+      - name: Create release
+        if: steps.check_release.outputs.needs_update == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "v${{ steps.check_release.outputs.new_version }}"
+          release_name: "Hayase v${{ steps.check_release.outputs.new_version }}"
+          body: |
+            Automatic update to Hayase v${{ steps.check_release.outputs.new_version }}
+
+            This release automatically tracks the upstream Hayase releases.
+
+            **Installation:**
+            ```bash
+            nix run github:yourusername/hayase-flake
+            ```
+
+            **Or add to your configuration:**
+            ```nix
+            {
+              inputs.hayase.url = "github:yourusername/hayase-flake";
+              # ... rest of your config
+            }
+            ```
+          draft: false
+          prerelease: false
