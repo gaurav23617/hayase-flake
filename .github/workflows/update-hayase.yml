@@ -125,7 +125,8 @@ jobs:
         if: steps.update.outputs.update_needed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use PAT instead of default GITHUB_TOKEN
+          token: ${{ secrets.PAT_TOKEN }}
           commit-message: "hayase: ${{ steps.update.outputs.current_version }} -> ${{ steps.update.outputs.latest_version }}"
           title: "hayase: ${{ steps.update.outputs.current_version }} -> ${{ steps.update.outputs.latest_version }}"
           body: |
