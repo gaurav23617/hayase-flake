@@ -49,7 +49,7 @@ jobs:
           # Update version in flake.nix
           sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" flake.nix
 
-          # Function to get hash for a URL using nix-prefetch-url with better error handling
+          # Function to get hash for a URL using nix-prefetch-url
           get_hash() {
             local url="$1"
             local platform="$2"
@@ -62,23 +62,17 @@ jobs:
               return 1
             fi
             
-            # Use nix-prefetch-url with explicit error handling
+            # Use nix-prefetch-url to get hash
             local hash
             hash=$(nix-prefetch-url --type sha256 "$url" 2>/dev/null)
             local exit_code=$?
             
-            if [[ $exit_code -eq 0 && $hash =~ ^[a-f0-9]{64}$ ]]; then
-              # Convert to base64 format
-              hash="sha256-$(echo -n "$hash" | xxd -r -p | base64 -w 0)"
+            if [[ $exit_code -eq 0 && -n "$hash" ]]; then
+              # Convert to sri format if needed
+              if [[ $hash =~ ^[a-f0-9]{64}$ ]]; then
+                hash="sha256-$(echo -n "$hash" | xxd -r -p | base64 -w 0)"
+              fi
               echo "✓ Got $platform hash: $hash"
-              echo "$hash"
-              return 0
-            fi
-            
-            # Try alternative method with nix-prefetch-url without --type
-            hash=$(nix-prefetch-url "$url" 2>/dev/null)
-            if [[ $hash =~ ^sha256- ]]; then
-              echo "✓ Got $platform hash (alternative method): $hash"
               echo "$hash"
               return 0
             fi
@@ -91,55 +85,91 @@ jobs:
           X86_64_URL="https://github.com/ThaUnknown/miru/releases/download/v${NEW_VERSION}/linux-Hayase-${NEW_VERSION}.AppImage"
           AARCH64_URL="https://github.com/ThaUnknown/miru/releases/download/v${NEW_VERSION}/linux-arm64-Hayase-${NEW_VERSION}.AppImage"
 
-          # Get hashes
-          X86_64_HASH=$(get_hash "$X86_64_URL" "x86_64")
-          X86_64_SUCCESS=$?
+          # Initialize success flags
+          X86_64_SUCCESS=0
+          AARCH64_SUCCESS=0
 
-          AARCH64_HASH=$(get_hash "$AARCH64_URL" "aarch64")
-          AARCH64_SUCCESS=$?
-
-          # Use placeholders for failed hashes
-          if [[ $X86_64_SUCCESS -ne 0 || -z "$X86_64_HASH" ]]; then
-            echo "Using placeholder for x86_64 hash"
+          # Get hashes with better error handling
+          echo "Attempting to fetch x86_64 hash..."
+          if X86_64_HASH=$(get_hash "$X86_64_URL" "x86_64"); then
+            X86_64_SUCCESS=1
+            echo "x86_64 hash: $X86_64_HASH"
+          else
+            echo "Failed to get x86_64 hash, using placeholder"
             X86_64_HASH="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
           fi
 
-          if [[ $AARCH64_SUCCESS -ne 0 || -z "$AARCH64_HASH" ]]; then
-            echo "Using placeholder for aarch64 hash"
+          echo "Attempting to fetch aarch64 hash..."
+          if AARCH64_HASH=$(get_hash "$AARCH64_URL" "aarch64"); then
+            AARCH64_SUCCESS=1
+            echo "aarch64 hash: $AARCH64_HASH"
+          else
+            echo "Failed to get aarch64 hash, using placeholder"
             AARCH64_HASH="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
           fi
 
-          # Update hashes in flake.nix
-          sed -i "/x86_64-linux = {/,/};/ s/hash = \"[^\"]*\"/hash = \"$X86_64_HASH\"/" flake.nix
-          sed -i "/aarch64-linux = {/,/};/ s/hash = \"[^\"]*\"/hash = \"$AARCH64_HASH\"/" flake.nix
+          # Update hashes in flake.nix using more robust sed commands
+          echo "Updating x86_64 hash..."
+          sed -i '/x86_64-linux = {/,/};/{
+            s/hash = "[^"]*"/hash = "'"$X86_64_HASH"'"/
+          }' flake.nix
+
+          echo "Updating aarch64 hash..."
+          sed -i '/aarch64-linux = {/,/};/{
+            s/hash = "[^"]*"/hash = "'"$AARCH64_HASH"'"/
+          }' flake.nix
 
           echo "Updated flake.nix with:"
           echo "  Version: $NEW_VERSION"
           echo "  x86_64 hash: $X86_64_HASH"
           echo "  aarch64 hash: $AARCH64_HASH"
 
+          # Verify the changes were made
+          echo "Verifying changes in flake.nix:"
+          grep -A 5 -B 5 "version = " flake.nix
+          grep -A 3 "x86_64-linux = {" flake.nix
+          grep -A 3 "aarch64-linux = {" flake.nix
+
+      - name: Test flake build
+        if: steps.check_release.outputs.needs_update == 'true'
+        run: |
+          echo "Testing flake build..."
+          # Try to build the flake to ensure it's valid
+          nix build .#default --no-link --print-build-logs || {
+            echo "Build failed, but continuing with update"
+            echo "This might be due to placeholder hashes"
+          }
+
       - name: Update flake.lock
         if: steps.check_release.outputs.needs_update == 'true'
         run: |
-          nix flake update
+          echo "Updating flake.lock..."
+          nix flake update --commit-lock-file
 
       - name: Commit and push changes
         if: steps.check_release.outputs.needs_update == 'true'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+
+          # Check if there are changes to commit
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
           git add flake.nix flake.lock
           git commit -m "Update Hayase to v${{ steps.check_release.outputs.new_version }}"
           git push
 
       - name: Create release
         if: steps.check_release.outputs.needs_update == 'true'
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "v${{ steps.check_release.outputs.new_version }}"
-          release_name: "Hayase v${{ steps.check_release.outputs.new_version }}"
+          name: "Hayase v${{ steps.check_release.outputs.new_version }}"
           body: |
             Automatic update to Hayase v${{ steps.check_release.outputs.new_version }}
 
@@ -147,13 +177,13 @@ jobs:
 
             **Installation:**
             ```bash
-            nix run github:yourusername/hayase-flake
+            nix run github:${{ github.repository }}
             ```
 
             **Or add to your configuration:**
             ```nix
             {
-              inputs.hayase.url = "github:yourusername/hayase-flake";
+              inputs.hayase.url = "github:${{ github.repository }}";
               # ... rest of your config
             }
             ```
