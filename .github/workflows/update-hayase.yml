@@ -22,7 +22,7 @@ jobs:
 
       - name: Fetch latest version + SHA
         run: |
-          LATEST=$(curl -s https://api.github.com/repos/ClearVision/Miru/releases/latest | jq -r .tag_name)
+          LATEST=$(curl -s https://api.github.com/repos/ClearVision/Miru/tags | jq -r '.[0].name')
           VERSION="${LATEST#v}"
 
           echo "Latest version: $VERSION"
