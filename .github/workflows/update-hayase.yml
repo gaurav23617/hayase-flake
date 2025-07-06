@@ -1,4 +1,4 @@
-name: Update Miru
+name: Update Hayase
 
 on:
   schedule:
@@ -22,68 +22,133 @@ jobs:
       - name: Setup Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Check for updates
+      - name: Make update script executable
+        run: |
+          echo "🔧 Making update script executable..."
+          chmod +x update.sh
+          echo "✅ Update script is now executable"
+
+      - name: Run update script
         id: update
         run: |
-          # Get latest version
-          LATEST=$(curl -s https://api.github.com/repos/ThaUnknown/miru/releases/latest | jq -r .tag_name)
-          LATEST_VERSION=${LATEST#v}
+          echo "🚀 Running update script..."
+          set +e  # Don't exit on error, we want to handle it ourselves
 
-          # Get current version
-          CURRENT=$(grep -oP 'version = "\K[^"]+' package.nix)
-
-          echo "current_version=$CURRENT" >> $GITHUB_OUTPUT
-          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-
-          if [ "$CURRENT" != "$LATEST_VERSION" ]; then
-            echo "update_needed=true" >> $GITHUB_OUTPUT
+          # Capture the output of the update script
+          if ./update.sh 2>&1 | tee update_output.txt; then
+            echo "✅ Update script completed successfully"
+            
+            # Check if update was needed
+            if grep -q "Already up to date" update_output.txt; then
+              echo "ℹ️  No update needed - already at latest version"
+              echo "update_needed=false" >> $GITHUB_OUTPUT
+            else
+              echo "📦 Update available - processing..."
+              echo "update_needed=true" >> $GITHUB_OUTPUT
+              
+              # Extract version information with better error handling
+              if CURRENT=$(grep "Current version:" update_output.txt | cut -d' ' -f3); then
+                echo "current_version=$CURRENT" >> $GITHUB_OUTPUT
+                echo "📋 Current version: $CURRENT"
+              else
+                echo "⚠️  Could not extract current version"
+                echo "current_version=unknown" >> $GITHUB_OUTPUT
+              fi
+              
+              if LATEST=$(grep "Latest version:" update_output.txt | cut -d' ' -f3); then
+                echo "latest_version=$LATEST" >> $GITHUB_OUTPUT
+                echo "📋 Latest version: $LATEST"
+              else
+                echo "⚠️  Could not extract latest version"
+                echo "latest_version=unknown" >> $GITHUB_OUTPUT
+              fi
+            fi
           else
-            echo "update_needed=false" >> $GITHUB_OUTPUT
+            echo "❌ Update script failed!"
+            echo "📋 Update script output:"
+            cat update_output.txt
+            echo "📋 Full error details above ⬆️"
+            exit 1
           fi
 
-      - name: Update package
+      - name: Fix pnpm hash
         if: steps.update.outputs.update_needed == 'true'
         run: |
-          # Run update script
-          chmod +x update.sh
-          ./update.sh
+          echo "🔍 Attempting initial build to get correct pnpm hash..."
+          set +e  # Don't exit on error
 
-          # Try to build and get pnpm hash
-          echo "Attempting to build to get pnpm hash..."
-          if ! nix build 2>&1 | tee build.log; then
+          if nix build 2>&1 | tee build.log; then
+            echo "✅ Build succeeded on first try - no hash update needed"
+          else
+            echo "⚠️  Build failed (expected) - extracting pnpm hash..."
+            
+            # Show the build error for debugging
+            echo "📋 Build output:"
+            cat build.log
+            
             # Extract the expected hash from build failure
             if grep -q "got:" build.log; then
               NEW_PNPM_HASH=$(grep "got:" build.log | tail -1 | sed 's/.*got: //')
-              echo "Found pnpm hash: $NEW_PNPM_HASH"
+              echo "✅ Found pnpm hash: $NEW_PNPM_HASH"
+              
               # Update the hash in package.nix
+              echo "🔄 Updating pnpm hash in package.nix..."
               sed -i "s/hash = \"sha256-.*\"/hash = \"$NEW_PNPM_HASH\"/" package.nix
+              echo "✅ pnpm hash updated successfully"
+            else
+              echo "❌ Could not extract pnpm hash from build output"
+              echo "📋 Build log content:"
+              cat build.log
+              echo "📋 Expected to find 'got:' in the output above"
+              exit 1
             fi
           fi
 
       - name: Test build
         if: steps.update.outputs.update_needed == 'true'
         run: |
-          nix build .#miru
-          echo "Build successful!"
+          echo "🧪 Testing final build..."
+          set +e  # Don't exit immediately on error
+
+          if nix build .#hayase 2>&1 | tee final_build.log; then
+            echo "✅ Build successful!"
+            echo "📦 Package built successfully - ready for PR"
+          else
+            echo "❌ Final build failed!"
+            echo "📋 Final build output:"
+            cat final_build.log
+            echo "📋 This indicates there might be other issues beyond pnpm hash"
+            exit 1
+          fi
 
       - name: Create Pull Request
         if: steps.update.outputs.update_needed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "miru: ${{ steps.update.outputs.current_version }} -> ${{ steps.update.outputs.latest_version }}"
-          title: "miru: ${{ steps.update.outputs.current_version }} -> ${{ steps.update.outputs.latest_version }}"
+          commit-message: "hayase: ${{ steps.update.outputs.current_version }} -> ${{ steps.update.outputs.latest_version }}"
+          title: "hayase: ${{ steps.update.outputs.current_version }} -> ${{ steps.update.outputs.latest_version }}"
           body: |
-            Automated update of Miru from ${{ steps.update.outputs.current_version }} to ${{ steps.update.outputs.latest_version }}
+            🤖 Automated update of Hayase from ${{ steps.update.outputs.current_version }} to ${{ steps.update.outputs.latest_version }}
 
             This PR was automatically created by the update workflow.
 
-            - [x] Version updated
-            - [x] Hash updated
-            - [x] Build tested
+            ## ✅ Completed Tasks
+            - [x] Version updated in package.nix
+            - [x] Source hash updated
+            - [x] pnpm dependencies hash updated
+            - [x] Build tested successfully
 
+            ## 🔗 Links
             **Changelog:** https://github.com/ThaUnknown/miru/releases/tag/v${{ steps.update.outputs.latest_version }}
-          branch: update-miru-${{ steps.update.outputs.latest_version }}
+            **Source:** https://github.com/ThaUnknown/miru/archive/refs/tags/v${{ steps.update.outputs.latest_version }}.tar.gz
+
+            ## 📋 Version Info
+            - **Previous:** `${{ steps.update.outputs.current_version }}`
+            - **New:** `${{ steps.update.outputs.latest_version }}`
+
+            Ready to merge! 🚀
+          branch: update-hayase-${{ steps.update.outputs.latest_version }}
           delete-branch: true
           labels: |
             automated
