@@ -1,0 +1,24 @@
+warning: Git tree '/home/runner/work/hayase-flake/hayase-flake' is dirty
+error:
+       … while evaluating a branch condition
+         at /nix/store/cd7fkv2r1nflz758r8bsnqfvkq7f72wj-source/lib/customisation.nix:305:5:
+          304|     in
+          305|     if missingArgs == { } then
+             |     ^
+          306|       makeOverridable f allArgs
+
+       … while calling the 'removeAttrs' builtin
+         at /nix/store/cd7fkv2r1nflz758r8bsnqfvkq7f72wj-source/lib/attrsets.nix:657:28:
+          656|   */
+          657|   filterAttrs = pred: set: removeAttrs set (filter (name: !pred name set.${name}) (attrNames set));
+             |                            ^
+          658|
+
+       (stack trace truncated; use '--show-trace' to show the full, detailed trace)
+
+       error: undefined variable 'src'
+       at /nix/store/vfm7h1l1s031zxz2p22q0b1bbd03yclh-source/package.nix:44:27:
+           43|   pnpmDeps = pnpm.fetchDeps {
+           44|     inherit pname version src;
+             |                           ^
+           45|     hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Update this
